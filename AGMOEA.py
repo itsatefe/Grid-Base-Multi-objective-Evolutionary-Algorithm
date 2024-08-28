@@ -37,6 +37,11 @@ class AGMOEA:
         self.ideal_point = evaluator.ideal_point()
         self.nadir_point = evaluator.nadir_point()
         self.true_pareto = evaluator.get_true_pareto()
+        self.best_hv = float('-inf')
+        self.best_igd = float('inf')
+        self.worsening_hv_count = 0
+        self.worsening_igd_count = 0
+
 
     
     def initialize_population(self):
@@ -290,16 +295,14 @@ class AGMOEA:
             self.construct_subspaces(P)
             self.improve_EXA()
             TP = []
-            
             for _ in range(self.NP):
                 selected_subspace = self.select_subspace()
                 offsprings = self.generate_offspring(selected_subspace)
                 TP += offsprings
                 for subspace in self.GBA:
                     self.GBA[tuple(subspace)].subspace_capacity(self.NGBA)
-            
+
             self.current_generation += 1
-            
             non_dominated_solutions = self.fast_non_dominated_sort(TP)[0]
             for solution in non_dominated_solutions:
                 is_already_present = any((element.objectives == solution.objectives).all() for element in self.EXA)
@@ -308,19 +311,35 @@ class AGMOEA:
 
             self.EXA = self.fast_non_dominated_sort(self.EXA)[0]
             self.EXA = self.manage_exa_capacity()
-            
+
+            # Calculate Pareto Objectives
             pareto_objectives = np.array([list(chromosome.objectives) for chromosome in self.EXA])
             hypervolume = self.calculate_hypervolume(pareto_objectives)
-            self.hypervolume_values.append(hypervolume)
             igd = self.calculate_igd(pareto_objectives)
+
+            # Check for HV improvement or worsening
+            if hypervolume > self.best_hv:
+                self.best_hv = hypervolume
+                self.worsening_hv_count = 0
+            else:
+                self.worsening_hv_count += 1
+
+            # Check for IGD improvement or worsening
+            if igd < self.best_igd:
+                self.best_igd = igd
+                self.worsening_igd_count = 0
+            else:
+                self.worsening_igd_count += 1
+
+            # Append new values to tracking lists
+            self.hypervolume_values.append(hypervolume)
             self.igd_values.append(igd)
-            
+
             self.update_operator_probabilities()
             P.extend(TP)
-        
             P = self.environmental_selection(P)
+
            
-    
     def environmental_selection(self, population):
         remaining_pop_size = self.NP
         new_population = []
@@ -331,12 +350,10 @@ class AGMOEA:
             if remaining_pop_size > front_size:
                 new_population += front
                 remaining_pop_size -= front_size
-                
             else:
                 self.crowding_distance(front)
                 front.sort(key=lambda chromosome: chromosome.crowding_distance, reverse=True)
                 new_population += front[:remaining_pop_size]
-                
                 break
         return new_population
 
@@ -344,9 +361,11 @@ class AGMOEA:
     def termination_criterion(self):
         if self.FETmax <= self.FET:
             return True
-#         if self.FET % 5000 == 0:
-#             print("so far: ",self.FET)
+        if self.worsening_hv_count >= 10 and self.worsening_igd_count >= 10:
+            print("Termination due to worsening HV and IGD for 10 consecutive iterations.")
+            return True
         return False
+
 
     def correct_pareto_front(self):
         tf = []
